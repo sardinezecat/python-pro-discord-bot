@@ -1,5 +1,6 @@
 import os
 import random
+import aiohttp
 import discord
 from discord.ext import commands
 from bot_logic import gen_pass
@@ -17,6 +18,8 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='$', intents=intents)
 
 LISTA_COMANDI = """**I comandi disponibili sono:**
+- Inquinamento di una città: `$pollution Milano`
+- Link sull'inquinamento: `$inquinamento`
 - Meme a caso: `$mem`
 - Apri lo scrigno dei meme (comune, raro o leggendario?): `$scrigno`
 - Lancia un dado: `$dado` (oppure `$dado 20`)
@@ -93,9 +96,9 @@ async def mem(ctx):
 # più alto è il numero, più spesso esce il meme
 RARITA = {
     'mem1.webp': 45,   # comune
-    'mem2.webp': 35,   # comune
+    'mem2.webp': 35,   # non comune
     'mem3.png': 15,    # raro
-    'meme.png': 5,     # leggendario: l'ho fatto io!
+    'meme.png': 5,     # epico: l'ho fatto io!
 }
 
 # $scrigno -> apri lo scrigno: che meme ti capita?
@@ -113,6 +116,65 @@ async def scrigno(ctx):
     with open(f'images/{img_name}', 'rb') as f:
         picture = discord.File(f)
         await ctx.send(file=picture)
+
+# ---------- Lezione M2L2: un link sull'inquinamento ----------
+
+# scrivi qui il link che vuoi, tra le virgolette (per ora è vuoto)
+LINK_INQUINAMENTO = "https://docs.google.com/document/d/1zU2Hqljsj7OMptlF5q1x1a39J9TekmWYZRItx7h7fM0/edit"
+
+# $inquinamento -> manda un link con il titolo sull'inquinamento
+@bot.command()
+async def inquinamento(ctx):
+    link = discord.Embed(
+        title="🌍 How to reduce pollution",
+        description="Click the title to read our tips!",
+    )
+    if LINK_INQUINAMENTO != "":
+        link.url = LINK_INQUINAMENTO
+    await ctx.send(embed=link)
+
+# $pollution Milano -> how polluted is the air in a city (number from the internet)
+@bot.command()
+async def pollution(ctx, *, city: str = ""):
+    if city == "":
+        await ctx.send("Write a city, for example: `$pollution Rome`")
+        return
+    async with aiohttp.ClientSession() as session:
+        # 1. find the city's position (latitude and longitude)
+        async with session.get("https://geocoding-api.open-meteo.com/v1/search",
+                               params={"name": city, "count": 10, "language": "it"}) as r:
+            places = await r.json()
+        # keep only towns and cities (not countries or regions)
+        towns = [p for p in places.get("results", []) if p.get("feature_code", "").startswith("PPL")]
+        if len(towns) == 0:
+            await ctx.send(f"I can't find the city **{city}** 🤔")
+            return
+        # if many cities have this name, take the biggest one
+        place = max(towns, key=lambda p: p.get("population", 0))
+        # 2. ask the air quality at that position
+        async with session.get("https://air-quality-api.open-meteo.com/v1/air-quality",
+                               params={"latitude": place["latitude"],
+                                       "longitude": place["longitude"],
+                                       "current": "us_aqi"}) as r:
+            air = await r.json()
+    aqi = air["current"]["us_aqi"]
+    if aqi is None:
+        await ctx.send(f"No pollution data for **{place['name']}** right now.")
+        return
+    if aqi <= 50:
+        level = "🟢 Good"
+    elif aqi <= 100:
+        level = "🟡 Moderate"
+    elif aqi <= 150:
+        level = "🟠 Unhealthy for sensitive people"
+    elif aqi <= 200:
+        level = "🔴 Unhealthy"
+    elif aqi <= 300:
+        level = "🟣 Very unhealthy"
+    else:
+        level = "🟤 Hazardous"
+    await ctx.send(f"🌍 Air pollution in **{place['name']}, {place.get('country', '')}**: "
+                   f"**{aqi}** US AQI → {level}")
 
 # se il comando non esiste (o qualcosa va storto) il bot lo dice in chat
 @bot.event
